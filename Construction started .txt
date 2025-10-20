@@ -1,0 +1,305 @@
+# Retry generation with safeguards to avoid division by zero and handle singularities.
+import numpy as np
+import matplotlib.pyplot as plt
+import json, textwrap, os, csv
+
+out_dir = "/mnt/data/construct_package"
+os.makedirs(out_dir, exist_ok=True)
+
+# Parameter grid
+rhos = np.linspace(0.0, 1.0, 201)
+as_ = np.linspace(-1.5, 1.5, 201)   # 'a' self-feedback
+b = -0.1
+mu = 0.0
+
+R, A = np.meshgrid(rhos, as_)
+denom = 1 - (1-R)*A
+# compute x_star with masking for small denom
+x_star = np.full_like(denom, np.nan, dtype=float)
+mask_valid = np.abs(denom) > 1e-6
+x_star[mask_valid] = ((1-R[mask_valid])*b + R[mask_valid]*mu) / denom[mask_valid]
+
+# Stability proxy: require abs((1-rho)*a) < 1 for linear map local stability of iterative map
+stability = np.abs((1-R)*A) < 1
+
+# Clip extreme values for plotting aesthetics
+x_star_plot = np.copy(x_star)
+x_star_plot[np.isnan(x_star_plot)] = 0.0
+x_star_plot = np.clip(x_star_plot, -5, 5)
+
+# Heatmap of x*
+fig1, ax1 = plt.subplots(figsize=(6,5))
+c = ax1.pcolormesh(R, A, x_star_plot, shading='auto', cmap='RdYlBu')
+ax1.set_xlabel('rho (ergodic coupling)')
+ax1.set_ylabel('a (self-feedback)')
+ax1.set_title('Equilibrium x* for linear reduction (b={:.2f}, mu={:.2f})'.format(b, mu))
+fig1.colorbar(c, ax=ax1, label='x* (clipped)')
+fig1.tight_layout()
+fig1_path = os.path.join(out_dir, "heatmap_xstar.png")
+fig1.savefig(fig1_path, dpi=150)
+
+# Heatmap of stability mask
+fig2, ax2 = plt.subplots(figsize=(6,5))
+c2 = ax2.pcolormesh(R, A, stability, shading='auto', cmap='gray_r')
+ax2.set_xlabel('rho')
+ax2.set_ylabel('a')
+ax2.set_title('Stability mask: |(1-rho)*a| < 1 (white = stable)')
+fig2.colorbar(c2, ax=ax2, label='stable (1) / unstable (0)')
+fig2.tight_layout()
+fig2_path = os.path.join(out_dir, "stability_mask.png")
+fig2.savefig(fig2_path, dpi=150)
+
+# Slices: show x* vs rho for several a values, handle denom singularities
+a_vals = [-1.0, -0.5, 0.0, 0.5, 1.0]
+fig3, ax3 = plt.subplots(figsize=(8,4))
+for av in a_vals:
+    denom_slice = 1 - (1-rhos)*av
+    xs = np.full_like(denom_slice, np.nan)
+    mask_ok = np.abs(denom_slice) > 1e-6
+    xs[mask_ok] = ((1-rhos[mask_ok])*b + rhos[mask_ok]*mu) / denom_slice[mask_ok]
+    ax3.plot(rhos, xs, label=f'a={av}')
+ax3.set_xlabel('rho')
+ax3.set_ylabel('x*')
+ax3.set_title('x* vs rho for selected a values')
+ax3.legend()
+ax3.grid(True, linestyle='--', linewidth=0.4)
+fig3_path = os.path.join(out_dir, "slices_xstar_vs_rho.png")
+fig3.savefig(fig3_path, dpi=150, bbox_inches='tight')
+
+# Save a CSV-style table of some sample computed x*
+sample_points = []
+for av in [-1.0, -0.5, 0.0, 0.5, 1.0]:
+    for rv in [0.0, 0.25, 0.5, 0.75, 1.0]:
+        denom_s = 1 - (1-rv)*av
+        if abs(denom_s) < 1e-6:
+            xs = float('nan')
+            stable = False
+        else:
+            xs = ((1-rv)*b + rv*mu) / denom_s
+            stable = abs((1-rv)*av) < 1
+        sample_points.append((rv, av, xs, stable))
+
+csv_path = os.path.join(out_dir, "sample_xstar_table.csv")
+with open(csv_path, 'w', newline='') as f:
+    writer = csv.writer(f)
+    writer.writerow(['rho','a','x_star','stable'])
+    for row in sample_points:
+        writer.writerow([f"{row[0]:.2f}", f"{row[1]:.2f}", f"{row[2] if not np.isnan(row[2]) else 'NaN'}", int(row[3])])
+
+# Create Streamlit app code (build-ready) as a single Python file
+streamlit_code = r'''
+# Streamlit app: Construct "God Equation" tuner
+# Usage: pip install streamlit numpy matplotlib
+# Run: streamlit run streamlit_app.py
+
+import streamlit as st
+import numpy as np
+import matplotlib.pyplot as plt
+
+st.set_page_config(layout="wide")
+st.title("Construct: God Equation Tuner — Scientific Mode")
+
+# Sidebar controls
+st.sidebar.header("Parameters (scientific)")
+a = st.sidebar.slider("a (self-feedback)", -1.5, 1.5, 0.6, 0.01)
+b = st.sidebar.slider("b (baseline bias)", -1.0, 1.0, -0.1, 0.01)
+rho = st.sidebar.slider("rho (ergodic coupling)", 0.0, 1.0, 0.4, 0.01)
+mu = st.sidebar.slider("mu (ensemble mean)", -2.0, 2.0, 0.0, 0.01)
+show_time = st.sidebar.checkbox("Show time-series simulation", True)
+reset_strength = st.sidebar.slider("Reset strength (s)", 0.0, 1.0, 0.8, 0.01)
+reset_times = st.sidebar.multiselect("Reset iterations (comma-separated)", [50,100,150,200,300], default=[100,250])
+
+# Compute fixed point (analytic)
+denom = 1 - (1-rho)*a
+if abs(denom) < 1e-6:
+    x_star = float('nan')
+    stability = False
+else:
+    x_star = ((1-rho)*b + rho*mu) / denom
+    stability = abs((1-rho)*a) < 1
+
+col1, col2 = st.columns([1,1])
+
+with col1:
+    st.subheader("Analytic fixed point")
+    st.write("x* = ((1-rho)*b + rho*mu) / (1 - (1-rho)*a)")
+    st.metric("x*", f"{x_star:.6f}" if (not np.isnan(x_star)) else "undefined")
+    st.write("Stability (| (1-rho)*a | < 1):", "✅ Stable" if stability else "🔴 Unstable / Near singular")
+
+    # Show phase portrait slice
+    xs = np.linspace(-2,2,400)
+    map_vals = (1-rho)* (a*xs + b) + rho*mu
+    fig, ax = plt.subplots(figsize=(5,4))
+    ax.plot(xs, map_vals, label='map: x_{n+1}')
+    ax.plot(xs, xs, '--', label='identity line')
+    ax.set_xlim(-2,2); ax.set_ylim(-2,2)
+    ax.set_title(f"Phase slice (a={a:.2f}, rho={rho:.2f})")
+    ax.legend()
+    st.pyplot(fig)
+
+with col2:
+    st.subheader("Parameter impacts (slices)")
+    rhos = np.linspace(0,1,201)
+    denom_s = 1 - (1-rhos)*0.5  # example slice, show generic behavior
+    xs = ((1-rhos)*b + rhos*mu) / np.where(np.abs(denom_s)>1e-6, denom_s, np.nan)
+    fig2, ax2 = plt.subplots(figsize=(6,2))
+    ax2.plot(rhos, xs, label=f'a=0.5 example')
+    ax2.set_xlabel('rho'); ax2.set_ylabel('x*')
+    ax2.grid(True, linestyle='--', linewidth=0.4)
+    st.pyplot(fig2)
+
+# Time-series simulation
+if show_time:
+    T = 400
+    x = np.zeros(T)
+    x[0] = -0.8
+    sigma = 0.02
+    for n in range(T-1):
+        x[n+1] = (1-rho)*(a*x[n] + b) + rho*mu + sigma*np.random.randn()
+        if (n+1) in reset_times:
+            s = reset_strength
+            x[n+1] = (1-s)*x[n+1] + s*mu
+    st.subheader("Time-series simulation (linear local map)")
+    figt, axt = plt.subplots(figsize=(8,3))
+    axt.plot(x); axt.set_xlabel("iteration n"); axt.set_ylabel("x_n")
+    for rt in reset_times:
+        axt.axvline(rt, linestyle='--', alpha=0.7)
+    st.pyplot(figt)
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("Export config: use the 'Share' button or copy parameter values.")
+st.write("Notes: This is a scientific reduction (linear local map). For the full operator model see the technical manual.")
+'''
+
+streamlit_path = os.path.join(out_dir, "streamlit_app.py")
+with open(streamlit_path, 'w') as f:
+    f.write(streamlit_code)
+
+# Create deployment README with instructions (how-to & where)
+deploy_readme = textwrap.dedent("""
+Construct God Equation Dashboard - Deployment & How-To
+
+Files included:
+- streamlit_app.py : Streamlit app ready to run locally or deploy.
+- heatmap_xstar.png, stability_mask.png, slices_xstar_vs_rho.png : analytic visuals.
+- sample_xstar_table.csv : sample numeric table for reference.
+- scientific_manual.txt : detailed scientific manual (operator, reductions, stability).
+- dummy_manual.txt : plain-English "for dummies" manual.
+
+Local run (quick):
+1. Install Python 3.8+ and pip.
+2. Create a virtualenv (recommended): python -m venv venv; source venv/bin/activate
+3. Install dependencies: pip install streamlit numpy matplotlib
+4. Run: streamlit run streamlit_app.py
+5. The local browser will open with the interactive dashboard (or visit http://localhost:8501).
+
+Deploy options:
+A) Streamlit Community Cloud (recommended, fastest)
+   - Create an account at https://streamlit.io/cloud
+   - Create a new app, connect a GitHub repo containing these files, and set the main file to streamlit_app.py.
+   - Streamlit Cloud will auto-deploy and provide a public URL.
+B) Heroku + Docker (more control)
+   - Create a Dockerfile that runs the app with 'streamlit run streamlit_app.py --server.port $PORT'
+   - Deploy the container to Heroku or any cloud provider (AWS ECS, GCP Cloud Run).
+C) VPS / Self-host (most control)
+   - Run on a VM, use nginx as reverse proxy and systemd to keep the service running.
+   - Use a process manager like pm2 or supervisor if deploying multiple services.
+
+Security & performance tips:
+- For public sharing, consider adding an authentication layer (Streamlit supports simple secrets or use OAuth via wrapper).
+- If you need higher throughput (many users), use Docker + Gunicorn + autoscaling on a cloud provider.
+
+Questions? I will produce a GitHub-ready repo structure and a one-click deploy button config next.
+""")
+
+with open(os.path.join(out_dir, "DEPLOY_README.txt"), 'w') as f:
+    f.write(deploy_readme)
+
+# Create scientific manual (technical) and dummy manual (plain English)
+scientific_manual = textwrap.dedent(f"""
+Construct 'God Equation' - Scientific Manual (Technical)
+
+1. Operator-level model (canonical):
+   dPsi_t = (L[Psi_t] + kappa K * Psi_t - lambda (I-P_local) Psi_t ) dt + Sigma(Psi_t) dW_t + sum_i (R_i - I) Psi_t delta(t-t_i)
+   - Psi_t : high-dim state vector (beliefs, memory, attention)
+   - L : intrinsic local deterministic operator (narrative drift)
+   - K : coupling kernel (functional mapping from global field to local)
+   - kappa : global coupling strength
+   - P_local : projector onto local attractor subspace
+   - lambda : friction/forgetting coefficient (controls plasticity)
+   - Sigma dW_t : state-dependent noise term (endogenous/exogenous)
+   - R_i : reset operators at times t_i (insight / death-like events)
+
+2. Linear scalar reduction (analytic):
+   x_{n+1} = (1-rho) (a x_n + b) + rho mu + noise + jumps
+   Analytic fixed point (no noise/jumps): x* = ((1-rho)b + rho mu) / (1 - (1-rho)a)
+
+3. Stability condition (linear map iterative stability):
+   Local stability proxy: |(1-rho) * a| < 1
+   If violated, the discrete iterations may diverge or enter oscillatory regimes.
+
+4. Parameter roles & interventions (mapping to measurable interventions):
+   - a (self-feedback): neuronal / cognitive autoregulation; higher a implies stronger habit reinforcement.
+   - b (baseline bias): homeostatic set point (mood baseline, conditioning)
+   - rho (coupling): synchronization; measurable via coherence metrics (EEG), increased by shared ritual, psychedelics, etc.
+   - mu (ensemble mean): cultural/field mean (consensus reality)
+   - lambda: biochemical/physiological factors that stabilize identity (sleep, metabolic control)
+   - R_i: fast transitions (high-dose experiences, rites) that project state toward mu
+
+5. Experiments & measurement:
+   - Fit parameters by longitudinal self-report + physiological proxies (HRV, EEG coherence)
+   - Test interventions by manipulating rho (group synchrony) and measuring convergence speed to x*
+
+6. Limitations:
+   - The linear reduction is a toy; real Psi_t is high-dimensional and nonlinear.
+   - Reset operator forms are underspecified; further modelling needed for exact projection matrices.
+""")
+
+dummy_manual = textwrap.dedent("""
+Construct 'God Equation' - For Dummies (Plain English)
+
+Goal:
+This is a tool for understanding how an individual's mindset (you) interacts with the group/field (everyone else) and how big events (insights, rituals) can change you fast.
+
+Key ideas:
+- Think of your mind as a number x that updates each day.
+- You have habits that pull you back to old patterns (that's 'a' and 'b').
+- You're also influenced by the group — that's 'rho' and 'mu' (how much you copy the field, and what the field's average is).
+- Sometimes you have big events (resets) that suddenly move you toward the group or toward a new place.
+
+The basic formula (simple):
+x_next = (1 - rho) * (a*x + b) + rho * mu
+- x_next: your next-day state
+- a: how strongly your habits repeat
+- b: your baseline mood/bias
+- rho: how much you sync with the group (0 = ignore everyone, 1 = totally follow)
+- mu: where the group sits (its average state)
+
+How to use it:
+- If you want to change fast: increase rho (join a group, do synchronized rituals, guided sessions), or have strong reset experiences (ritual, peak experience).
+- If you want to stay stable: increase your own friction (sleep, routine, grounding), lower rho.
+- The dashboard lets you move sliders and watch the number settle where it will end up.
+
+Quick recipes:
+- Want rapid alignment to a goal? Raise rho and schedule a reset (intensive workshop, immersive retreat).
+- Want to protect a fragile identity? Lower rho and strengthen daily routine (reduce a's volatility).
+
+That's it. Use the dashboard to experiment.
+""")
+
+with open(os.path.join(out_dir, "scientific_manual.txt"), 'w') as f:
+    f.write(scientific_manual)
+with open(os.path.join(out_dir, "dummy_manual.txt"), 'w') as f:
+    f.write(dummy_manual)
+
+created = {
+    "heatmap": fig1_path,
+    "stability_mask": fig2_path,
+    "slices": fig3_path,
+    "csv_table": csv_path,
+    "streamlit_app": streamlit_path,
+    "deploy_readme": os.path.join(out_dir, "DEPLOY_README.txt"),
+    "scientific_manual": os.path.join(out_dir, "scientific_manual.txt"),
+    "dummy_manual": os.path.join(out_dir, "dummy_manual.txt")
+}
+created
