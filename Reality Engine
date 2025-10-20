@@ -1,0 +1,89 @@
+# Reality Engine v1.1 - Streamlit app (dual-mode, splash)
+import streamlit as st
+import numpy as np
+import matplotlib.pyplot as plt
+from PIL import Image
+import os
+
+st.set_page_config(layout="wide", page_title="Reality Engine", page_icon=None)
+
+# Splash / branding
+col1, col2, col3 = st.columns([1,2,1])
+with col2:
+    try:
+        img_path = None
+        # prefer branded images if present
+        for fname in os.listdir("branding"):
+            if fname.lower().endswith(".png"):
+                img_path = os.path.join("branding", fname); break
+        if img_path:
+            img = Image.open(img_path)
+            st.image(img, use_column_width=True)
+    except Exception:
+        st.markdown("### Reality Engine")
+    st.caption("Reality Engine v1.1 — Created by Mr. Hudson | ArtHaus Systems 2025")
+    st.markdown("---")
+
+mode = st.sidebar.radio("Mode", ["Scientific", "For Dummies"])
+
+if mode == "Scientific":
+    st.header("Reality Engine — Scientific Mode")
+    st.markdown("Analytic reduction of the Construct operator. Use sliders to explore parameter space.")
+
+    a = st.sidebar.slider("a (self-feedback)", -1.5, 1.5, 0.6, 0.01)
+    b = st.sidebar.slider("b (baseline bias)", -1.0, 1.0, -0.1, 0.01)
+    rho = st.sidebar.slider("rho (ergodic coupling)", 0.0, 1.0, 0.4, 0.01)
+    mu = st.sidebar.slider("mu (ensemble mean)", -2.0, 2.0, 0.0, 0.01)
+    show_time = st.sidebar.checkbox("Show time-series simulation", True)
+
+    denom = 1 - (1-rho)*a
+    if abs(denom) < 1e-6:
+        x_star = float('nan'); stability = False
+    else:
+        x_star = ((1-rho)*b + rho*mu) / denom
+        stability = abs((1-rho)*a) < 1
+
+    st.subheader("Analytic fixed point")
+    st.write("x* = ((1-rho)*b + rho*mu) / (1 - (1-rho)*a)")
+    st.metric("x*", f"{x_star:.6f}" if (not np.isnan(x_star)) else "undefined")
+    st.write("Stability (| (1-rho)*a | < 1):", "✅ Stable" if stability else "🔴 Unstable / Near singular")
+
+    xs = np.linspace(-2,2,400)
+    map_vals = (1-rho)*(a*xs + b) + rho*mu
+    fig, ax = plt.subplots(figsize=(6,4))
+    ax.plot(xs, map_vals, label='map: x_{n+1}')
+    ax.plot(xs, xs, '--', label='identity line')
+    ax.set_xlim(-2,2); ax.set_ylim(-2,2)
+    ax.set_title(f"Phase slice (a={a:.2f}, rho={rho:.2f})")
+    ax.legend(); ax.grid(True, linestyle='--', linewidth=0.4)
+    st.pyplot(fig)
+
+    if show_time:
+        T=300; x=np.zeros(T); x[0]=-0.8; sigma=0.02
+        reset_strength = st.sidebar.slider("Reset strength", 0.0, 1.0, 0.8, 0.01)
+        reset_times = st.sidebar.multiselect("Reset iterations", [50,100,150,200,250], default=[100,200])
+        for n in range(T-1):
+            x[n+1] = (1-rho)*(a*x[n] + b) + rho*mu + sigma*np.random.randn()
+            if (n+1) in reset_times:
+                s = reset_strength; x[n+1] = (1-s)*x[n+1] + s*mu
+        st.subheader("Time-series simulation")
+        figt, axt = plt.subplots(figsize=(8,3))
+        axt.plot(x); axt.set_xlabel("iteration n"); axt.set_ylabel("x_n")
+        for rt in reset_times: axt.axvline(rt, linestyle='--', alpha=0.7)
+        st.pyplot(figt)
+
+else:
+    st.header("Reality Engine — For Dummies")
+    st.write("Simple sliders to experiment with group sync and habit strength.")
+    rho = st.slider("Group sync (rho)", 0.0, 1.0, 0.4, 0.01)
+    habit = st.slider("Habit strength (a)", -1.5, 1.5, 0.6, 0.01)
+    bias = st.slider("Baseline bias (b)", -1.0, 1.0, -0.1, 0.01)
+    mu = st.slider("Group average (mu)", -2.0, 2.0, 0.0, 0.01)
+    T=200; x=np.zeros(T); x[0]=-0.5
+    for n in range(T-1):
+        x[n+1] = (1-rho)*(habit*x[n] + bias) + rho*mu + 0.02*np.random.randn()
+    fig, ax = plt.subplots(figsize=(8,3)); ax.plot(x); ax.set_title("Simple simulation of your state over time")
+    st.pyplot(fig)
+
+st.markdown('---')
+st.caption("Carpe Constructum — Seize the Construct.")
