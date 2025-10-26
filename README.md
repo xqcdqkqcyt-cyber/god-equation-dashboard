@@ -63,14 +63,4 @@ MIT © 2025 Mr. Hudson | ArtHaus Systems
 
 ⸻
 
-After you push the repo with this README:
-	1.	GitHub will auto-generate the project page with your logos from the branding/ folder.
-	2.	Streamlit Cloud will use this file to display the “Open in Streamlit” button.
 
-⸻
-
-Next optional steps (if you want):
-	•	I can craft a social-media launch caption + press-style summary for your first public post.
-	•	Or build the GitHub “About” metadata (topics + description) JSON for you to paste into the repo settings.
-
-Would you like me to generate both of those next (for social + GitHub metadata)?
